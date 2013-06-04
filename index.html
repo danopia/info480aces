@@ -1,0 +1,471 @@
+
+<title>INFO 480 Aces</title>
+<meta charset="utf-8">
+
+<style>
+html, body { margin: 0; padding: 0; overflow: hidden; }
+</style>
+
+<script src="http://code.jquery.com/jquery-1.10.1.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  var tweets = {};
+  var plotted = [];
+  
+  var selected = false;
+  
+  var embeds = {};
+  var embedTo = {};
+  function getEmbed (id, $target) {
+    if (embeds[id]) {
+      $target.append(embeds[id].html);
+    } else {
+      embedTo[id] = $target;
+      socket.emit('embed', id);
+      console.log('requested embed of', id);
+    };
+  };
+  
+  function newColor() {
+    var letters = '0123456789ABCDEF'.split('');
+    var color = '#';
+    for (var i = 0; i < 6; i++ ) {
+        color += letters[2 + Math.round(Math.random() * 12)];
+    }
+    return color;
+  };
+  
+  var socket = io.connect();
+  socket.on('embed', function (embed) {
+    embeds[embed.id] = embed;
+    
+    if (embedTo[embed.id]) {
+      embedTo[embed.id].append(embed.html);
+      delete embedTo[embed.id];
+    };
+  });
+  
+  $(function(){
+    $('#top').on('click', 'li', function (e) {
+      var id = $(e.currentTarget).data('tweet');
+      
+      if (tweets[id]) {
+        selected = id;
+      } else {
+        selected = false;
+      }
+      drawPoly(tweets[id]);
+    });
+    
+    setTimeout(function () {
+    $('.dots').on('mouseover', 'path', function (e) {
+      var id = $(e.target).attr('data-tweet');
+      
+      if (tweets[id]) {
+        selected = id;
+      } else {
+        selected = false;
+      }
+      drawPoly(tweets[id]);
+    });
+    
+    $('.dots').on('mouseout', 'path', function (e) {
+      var id = $(e.target).attr('data-tweet');
+      
+      if (selected == id) {
+        selected = false;
+        drawPoly(false);
+      }
+    });
+    
+    $('.dots').on('click', 'path', function (e) {
+      var ot = $(e.target).attr('data-tweet');
+      var id = $(e.target).attr('data-id');
+      
+      $('#top').empty();
+      
+      var $li = $('<li/>').appendTo($('#top')); // <script>
+      //$li.css({'border-left': '5px solid ' + ot.color});
+      $li.css({'background-color': $(e.target).attr('fill')});
+      $li.data('tweet', ot);
+      getEmbed(ot, $li);
+    });
+    }, 500);
+  });
+  
+  var symbols = ['circle', 'triangle-up', 'square', 'diamond', 'cross', 'trangle-down'];
+  socket.on('terms', function (terms) {
+    $.terms = terms;
+    $('#filter span').text('#' + terms.join(' #'));
+  });
+  
+  socket.on('tweet', function (tweet) {
+    //console.log(tweet);
+    var rt = tweet.retweeted_status;
+    delete tweet.retweeted_status;
+    tweet.rt_of = rt.id_str;
+    
+    tweet.created_at = new Date(Date.parse(tweet.created_at));
+    rt.created_at = new Date(Date.parse(rt.created_at));
+    
+    tweet.ot_rts = rt.retweet_count;
+    tweet.ot_favs = rt.favorite_count;
+    
+    tweets[tweet.id_str] = tweet;
+    
+    if (tweets[rt.id_str]) {
+      //console.log('Got a live one!', tweets[rt.id_str].retweet_count, 'to', rt.retweet_count);
+      tweets[rt.id_str].retweet_count = rt.retweet_count;
+      
+      if (rt.created_at >= (new Date()*1)-(600*1000)) {
+        for (var i = 0; i < plotted.length; i++)
+          if (plotted[i].id == rt.id_str)
+            plotted.splice(i, 1);
+        
+        var symbol = 'circle';
+        for (var i = 0; i < $.terms.length; i++)
+          if (rt.text.toLowerCase().indexOf($.terms[i].toLowerCase()) >= 0)
+            symbol = symbols[i];
+      
+        plotted.push({id: rt.id_str, color: tweets[rt.id_str].color, "name":'@' + rt.user.screen_name + ' ' + rt.text,"income":rt.created_at,"population":rt.retweet_count,"lifeExpectancy":rt.favorite_count,rt:true,symbol:symbol,ot:rt.id_str});
+        plotted.push({id: tweet.id_str, color: tweets[rt.id_str].color, "name":'@' + tweet.user.screen_name + ' ' + tweet.text,"income":tweet.created_at,"population":rt.retweet_count,"lifeExpectancy":rt.favorite_count,symbol:symbol,ot:rt.id_str});
+      } else {
+        //console.log('old tweet');
+      }
+      //console.log(tweet);
+    } else {
+      tweets[rt.id_str] = rt;
+      tweets[rt.id_str].rts = [];
+      tweets[rt.id_str].color = newColor();
+    };
+    
+    tweets[rt.id_str].rts.push(tweet);
+    
+    //console.log(tweets);
+  });
+  
+  var timerData = function () {
+        onData(plotted);
+        
+      if (tweets[selected]) {
+        drawPoly(tweets[selected]);
+      } else {
+              selected = false;
+        if (poly) {
+          poly.remove();
+        };
+      }
+      };
+  
+  var timerGarbage = function () {
+    var cutoff = Math.round(new Date()*1)-(600*1000);
+    var bef = plotted.length;
+        for (var i = 0; i < plotted.length; i++)
+          if (plotted[i].income < cutoff)
+            plotted.splice(i, 1);
+            
+            var ids = Object.keys(tweets);
+        for (var i = 0; i < ids.length; i++) {
+          var id = ids[i];
+          if (tweets[id].created_at < cutoff) {
+            delete tweets[id];
+          }
+        }
+        console.log("Garbage collected", ids.length - Object.keys(tweets).length, "tweets and", bef - plotted.length, "points");
+            };
+            
+  var timerTop = function () {
+    var top = plotted.filter(function (p) { return p.rt; }).sort(function (a,b) { return b.population - a.population; }).slice(0, 5);
+    
+    $('#top').empty();
+    top.forEach(function (ot) {
+      var $li = $('<li/>').appendTo($('#top')); // <script>
+      //$li.css({'border-left': '5px solid ' + ot.color});
+      $li.css({'background-color': ot.color});
+      $li.data('tweet', ot.id);
+      getEmbed(ot.id, $li);
+    });
+  };
+  
+  var timer1, timer2, timer3;
+  
+  function resume () {
+    if (timer1) return;
+    timer1 = setInterval(timerData, 500);
+    timer2 = setInterval(timerGarbage, 5000);
+    timer3 = setInterval(timerTop, 30000);
+  };
+  
+  function pause () {
+    if (!timer1) return;
+    clearInterval(timer1);
+    clearInterval(timer2);
+    clearInterval(timer3);
+    timer1 = timer2 = timer3 = false;
+  };
+  
+  resume();
+  
+  $(function () {
+    var paused = false;
+    $('#pause').on('click', function (e) {
+      e.preventDefault();
+      
+      if (paused) {
+        $('#pause').text('pause');
+        resume();
+        timerData();
+        timerTop();
+        timerGarbage();
+      } else {
+        $('#pause').text('resume');
+        pause();
+      }
+      paused = !paused;
+    });
+    
+    $('#deselect').click(function (e) {
+      selected = false;
+      
+        if (poly) {
+          poly.remove();
+        };
+    });
+    
+    $('#showOTs').click(function() {
+    var $this = $(this);
+    // $this will contain a reference to the checkbox   
+    if ($this.is(':checked')) {
+        $('body').removeClass('hideots');
+    } else {
+        $('body').addClass('hideots');
+    }
+}); 
+    $('#showRTs').click(function() {
+    var $this = $(this);
+    // $this will contain a reference to the checkbox   
+    if ($this.is(':checked')) {
+        $('body').removeClass('hiderts');
+    } else {
+        $('body').addClass('hiderts');
+    }
+});
+
+    $('#download').click(function () {
+      var rows = new Array('ID,Time,Screenname,Text,RTs,Faves\r\n');
+      var ids = Object.keys(tweets).sort();
+      for (var i = 0; i < ids.length; i++) {
+        var tweet = tweets[ids[i]];
+        console.log(tweet);
+        var cells = [tweet.id_str, tweet.created_at, tweet.user.screen_name.replace(/"/g, '""'), tweet.text.replace(/"/g, '""'), tweet.retweet_count, tweet.favorite_count];
+        rows.push('"' + cells.join('","') + '"\r\n');
+      };
+      
+      var raw = rows.join('');
+      var uri = 'data:application/csv;charset=UTF-8,' + encodeURIComponent(raw);
+      
+      //window.open(uri);
+      
+      $('#csv').attr('href', uri).text('Save ' + (rows.length - 1) + ' tweets');
+      //<a download="tweets.csv" href="data:application/csv;charset=utf-8,Col1%2CCol2%2CCol3%0AVal1%2CVal2%2CVal3%0AVal11%2CVal22%2CVal33%0AVal111%2CVal222%2CVal333">Example</a>
+
+    
+    });
+
+
+  });
+</script>
+
+<style>
+#pane { position: absolute; right: 0; width: 400px; top: 0; bottom: 0; border-left: 1px solid #666; overflow: auto; padding-top: 10px; }
+ul { padding: 0; }
+li { list-style: none; padding: 10px 0; }
+p { margin: 0 5px; font-family: "Ubuntu Sans", Calibri, Helvetica, Arial, sans-serif; }
+
+.axis {
+  shape-rendering: crispEdges;
+}
+.axis path, .axis line {
+  fill: none;
+  stroke: #000;
+}
+.polys path {
+  fill: none;
+  stroke: #000;
+  stroke-width: 2px;
+}
+
+.hiderts .rt { visibility: hidden; }
+.hideots .ot { visibility: hidden; }
+</style>
+
+<body>
+
+<p id="chart"></p>
+
+<div id="pane">
+  <p id="filter">Filter: <span></span> <a href="#">(change)</a></p>
+  <p><input type="checkbox" id="showOTs" checked> Show original tweets</p>
+  <p><input type="checkbox" id="showRTs" checked> Show RTs</p>
+  <p><button id="pause">Pause</button> <button id="deselect">Deselect</button> <button id="download">To CSV</button> <a id="csv" download="tweets.csv"></a></p>
+  <ul id="top"></ul>
+</div>
+
+<script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+<script>
+
+// Chart dimensions.
+var margin = {top: 19.5, right: 19.5, bottom: 30, left: 50},
+    width = document.width - margin.right - margin.left - 400,
+    height = document.height - margin.top - margin.bottom;
+
+var x = d3.time.scale()
+    .range([0, width]);
+ 
+var y = d3.scale.log()
+    .range([height, 0]);
+var r = d3.scale.linear()
+    .range([15, 350]);
+    
+// The x & y axes.
+var xAxis = d3.svg.axis().orient("bottom").scale(x),
+    yAxis = d3.svg.axis().scale(y).orient("left").tickFormat(d3.format(",.0f"));
+
+// Create the SVG container and set the origin.
+var svg = d3.select("#chart").append("svg")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom)
+  .append("g")
+    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+// Add the x-axis.
+var xx, yy;
+
+// Add an x-axis label.
+svg.append("text")
+    .attr("class", "x label")
+    .attr("text-anchor", "end")
+    .attr("x", width)
+    .attr("y", height - 6)
+    .text("time");
+
+// Add a y-axis label.
+svg.append("text")
+    .attr("class", "y label")
+    .attr("text-anchor", "end")
+    .attr("y", 6)
+    .attr("dy", ".75em")
+    .attr("transform", "rotate(-90)")
+    .text("number of RTs");
+
+/*
+// Add the year label; the value is set on transition.
+var label = svg.append("text")
+    .attr("class", "year label")
+    .attr("text-anchor", "end")
+    .attr("y", height - 24)
+    .attr("x", width)
+    .text(1800);*/
+
+// Load the data.
+//d3.json("http://dorm.danopia.net/nations.json", function(nations) {
+//var nations = [{"name":"Angola1","region":"Sub-Saharan Africa","income":359.93,"population":1567028,"lifeExpectancy":26.98},{"name":"Angola2","region":"Sub-Saharan Africa","income":559.93,"population":1577028,"lifeExpectancy":26.98},{"name":"Angola3","region":"Sub-Saharan Africa","income":659.93,"population":1677028,"lifeExpectancy":26.98}];
+
+var dota = svg.append("g")
+      .attr("class", "dots");
+var dot;
+function onData(nations) {
+  //x.domain(d3.extent(nations, function(d) { return d.income; })).nice();
+  x.domain([new Date((new Date())-(600*1000)), new Date()]);
+  y.domain(d3.extent(nations, function(d) { return d.population; })).nice();
+  r.domain(d3.extent(nations, function(d) { return d.lifeExpectancy; }));
+  
+  xAxis.scale(x);
+  yAxis.scale(y);
+  
+  if (dot) {
+    dot.remove();
+    xx.remove();
+    yy.remove();
+  }
+  
+// Add the x-axis.
+xx = svg.append("g")
+    .attr("class", "x axis")
+    .attr("transform", "translate(0," + height + ")")
+    .call(xAxis);
+
+// Add the y-axis.
+yy = svg.append("g")
+    .attr("class", "y axis")
+    .call(yAxis);
+  
+  // Add a dot per nation. Initialize the data at 1800, and set the colors.
+  dot = dota
+    .selectAll(".dot")
+      .data(nations)
+    .enter().append("path")
+      .attr("class", "dot")
+      //.style("fill", function(d) { return colorScale(color(d)); })
+      .call(position)
+      //.sort(order);
+
+  // Add a title.
+  dot.append("title")
+      .text(function(d) { return d.name; });
+
+  // Add an overlay for the year label.
+  /*var box = label.node().getBBox();
+
+  var overlay = svg.append("rect")
+        .attr("class", "overlay")
+        .attr("x", box.x)
+        .attr("y", box.y)
+        .attr("width", box.width)
+        .attr("height", box.height)
+        //.on("mouseover", enableInteraction);*/
+
+  // Positions the dots based on data.
+  function position(dot) {
+    dot.attr("transform", function(d) { return "translate(" + x(d.income) + "," + y(d.population) + ")"; })
+        .attr("d", d3.svg.symbol().type(function(d) { return d.symbol; }).size(function(d) { return r(d.lifeExpectancy); }))
+        .attr("class", function (d) { return (d.rt ? 'ot' : 'rt'); })
+        .attr("stroke", "black")
+        .attr("stroke-width", function(d) { return (d.rt ? 2 : 0); })
+        .attr("data-tweet", function(d) { return d.ot; })
+        .attr("data-id", function(d) { return d.id; })
+        .attr("fill", function (d) { return d.color; });
+  }
+
+  // Defines a sort order so that the smallest dots are drawn on top.
+  function order(a, b) {
+    return radius(b) - radius(a);
+  }
+}
+//}); */
+
+var polyg = svg.append("g")
+      .attr("class", "polys");
+var poly;
+  var line = d3.svg.line()
+      .interpolate("basis")
+      .x(function(d) { return x(d.created_at); })
+      .y(function(d) { return y(d.ot_rts); });
+function drawPoly (ot) {
+  if (poly) {
+    poly.remove();
+  };
+  
+  if (!ot) return;
+      
+      
+
+  poly = polyg.selectAll(".line")
+    .data([ot.rts])
+  .enter().append("path")
+    .attr("class", "line")
+    .attr("d", line);
+  
+};
+
+</script>
